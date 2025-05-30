@@ -1,4 +1,4 @@
-// server.js - Serveur WebSocket pour Render.com
+// server.js - Serveur WebSocket pour Render.com - VERSION COMPLÈTE AVEC AUDIO
 const express = require('express');
 const WebSocket = require('ws');
 const http = require('http');
@@ -26,9 +26,10 @@ const clientSockets = new Map();
 app.get('/', (req, res) => {
     res.json({
         service: "Ecoute Boubouh Server",
-        version: "1.0.0",
+        version: "2.0.0 - Audio Support",
         status: "running",
         connections: connections,
+        features: ["identification", "audio_streaming", "real_time_communication"],
         timestamp: new Date().toISOString()
     });
 });
@@ -52,6 +53,96 @@ function updateStats() {
     console.log('📊 Stats mises à jour:', connections);
 }
 
+// NOUVELLE FONCTION: Gérer les données audio
+function handleAudioData(data, fromClient) {
+    console.log(`🎵 Traitement audio de ${fromClient}`);
+    
+    const { from, to, data: audioData, sampleRate, format, channels } = data;
+    
+    // Validation des données
+    if (!audioData || audioData.length === 0) {
+        console.error('❌ Données audio vides');
+        return;
+    }
+    
+    if (!to || (to !== 'bernard' && to !== 'liliann')) {
+        console.error(`❌ Destinataire invalide: ${to}`);
+        return;
+    }
+    
+    // Vérifier que l'expéditeur correspond au client connecté
+    if (from !== fromClient) {
+        console.error(`❌ Expéditeur incohérent: ${from} vs ${fromClient}`);
+        return;
+    }
+    
+    console.log(`🎵 Audio de ${from} vers ${to} - Taille: ${audioData.length} caractères`);
+    
+    // Préparer le message audio pour le destinataire
+    const audioMessage = {
+        type: 'audio_data',
+        from: from,
+        to: to,
+        data: audioData,
+        sampleRate: sampleRate || 44100,
+        format: format || 'PCM_16BIT',
+        channels: channels || 1,
+        timestamp: new Date().toISOString()
+    };
+    
+    // Envoyer l'audio au destinataire
+    const targetSocket = clientSockets.get(to);
+    if (targetSocket && targetSocket.readyState === WebSocket.OPEN) {
+        try {
+            targetSocket.send(JSON.stringify(audioMessage));
+            console.log(`✅ Audio transféré de ${from} vers ${to}`);
+        } catch (error) {
+            console.error(`❌ Erreur envoi audio vers ${to}:`, error.message);
+        }
+    } else {
+        console.log(`⚠️ ${to} non connecté - audio ignoré`);
+        
+        // Informer l'expéditeur que le destinataire n'est pas disponible
+        const notificationMessage = {
+            type: 'delivery_failed',
+            target: to,
+            reason: 'Client non connecté',
+            timestamp: new Date().toISOString()
+        };
+        
+        const senderSocket = clientSockets.get(fromClient);
+        if (senderSocket && senderSocket.readyState === WebSocket.OPEN) {
+            try {
+                senderSocket.send(JSON.stringify(notificationMessage));
+            } catch (error) {
+                console.error(`❌ Erreur notification vers ${fromClient}:`, error.message);
+            }
+        }
+    }
+}
+
+// NOUVELLE FONCTION: Broadcaster le statut des utilisateurs
+function broadcastUserStatus() {
+    const userStatusMessage = {
+        type: "user_status",
+        users: {
+            bernard: connections.bernard,
+            liliann: connections.liliann
+        },
+        timestamp: new Date().toISOString()
+    };
+    
+    clientSockets.forEach((socket, name) => {
+        if (socket.readyState === WebSocket.OPEN) {
+            try {
+                socket.send(JSON.stringify(userStatusMessage));
+            } catch (error) {
+                console.error(`❌ Erreur broadcast status vers ${name}:`, error.message);
+            }
+        }
+    });
+}
+
 // Gestion des connexions WebSocket
 wss.on('connection', (ws, req) => {
     console.log('📱 Nouvelle connexion WebSocket');
@@ -65,20 +156,57 @@ wss.on('connection', (ws, req) => {
     ws.send(JSON.stringify({
         type: "welcome",
         message: "Connexion WebSocket établie! Envoyez 'bernard' ou 'liliann' pour vous identifier.",
+        server: "Ecoute Boubouh Server v2.0",
+        features: ["audio_streaming", "real_time_communication"],
         connectionId: connectionId,
         timestamp: new Date().toISOString()
     }));
     
     ws.on('message', (message) => {
         const messageStr = message.toString();
-        console.log('📥 Message reçu:', messageStr);
+        console.log('📥 Message reçu:', messageStr.length > 100 ? messageStr.substring(0, 100) + '...' : messageStr);
         console.log('📥 De:', clientName || 'non-identifié');
         
         // Essayer de parser en JSON d'abord
         try {
             const data = JSON.parse(messageStr);
-            console.log('📄 JSON parsé:', data);
+            console.log('📄 JSON parsé - Type:', data.type);
             
+            // NOUVEAU: Gérer les différents types de messages
+            if (data.type === "audio_data") {
+                // Traitement des données audio
+                if (clientName) {
+                    handleAudioData(data, clientName);
+                } else {
+                    console.error('❌ Tentative d\'envoi audio sans identification');
+                    ws.send(JSON.stringify({
+                        type: "error",
+                        message: "Vous devez d'abord vous identifier avant d'envoyer de l'audio",
+                        timestamp: new Date().toISOString()
+                    }));
+                }
+                return; // Sortir ici pour éviter le traitement d'identification
+            } else if (data.type === "ping") {
+                // Répondre aux pings
+                ws.send(JSON.stringify({
+                    type: "pong",
+                    timestamp: new Date().toISOString()
+                }));
+                return;
+            } else if (data.type === "status_request") {
+                // Envoyer le statut des utilisateurs
+                ws.send(JSON.stringify({
+                    type: "user_status",
+                    users: {
+                        bernard: connections.bernard,
+                        liliann: connections.liliann
+                    },
+                    timestamp: new Date().toISOString()
+                }));
+                return;
+            }
+            
+            // Traitement de l'identification
             if (data.type === "connect" && data.user) {
                 clientName = data.user;
             } else if (data.action === "identify" && data.device) {
@@ -121,7 +249,7 @@ wss.on('connection', (ws, req) => {
                 type: "connection_confirmed",
                 client: clientName,
                 status: "connected",
-                message: `Bonjour ${clientName}! Connexion réussie.`,
+                message: `Bonjour ${clientName}! Connexion réussie. Audio streaming disponible.`,
                 connectionId: connectionId,
                 timestamp: new Date().toISOString()
             };
@@ -129,11 +257,18 @@ wss.on('connection', (ws, req) => {
             ws.send(JSON.stringify(confirmationMessage));
             console.log('✅ Confirmation envoyée à', clientName);
             
+            // Broadcaster le statut des utilisateurs à tous les clients
+            broadcastUserStatus();
+            
+        } else if (clientName) {
+            // Le client est déjà identifié, traiter d'autres messages
+            console.log(`📨 Message de ${clientName}:`, messageStr.substring(0, 50) + '...');
+            
         } else {
             // Message de debug pour comprendre ce qui arrive
             const debugMessage = {
                 type: "debug",
-                received: messageStr,
+                received: messageStr.substring(0, 100),
                 message: "Message reçu mais format non reconnu. Essayez 'bernard' ou 'liliann'",
                 expectedFormats: [
                     "bernard",
@@ -158,6 +293,9 @@ wss.on('connection', (ws, req) => {
             connections[clientName] = "disconnected";
             updateStats();
             console.log(`🔌 ${clientName} marqué comme déconnecté`);
+            
+            // Broadcaster le nouveau statut
+            broadcastUserStatus();
         }
     });
     
@@ -167,6 +305,7 @@ wss.on('connection', (ws, req) => {
             clientSockets.delete(clientName);
             connections[clientName] = "disconnected";
             updateStats();
+            broadcastUserStatus();
         }
     });
     
@@ -182,15 +321,40 @@ wss.on('connection', (ws, req) => {
 
 // Nettoyage périodique des connexions fermées
 setInterval(() => {
+    let cleanupNeeded = false;
+    
     clientSockets.forEach((socket, clientName) => {
         if (socket.readyState !== WebSocket.OPEN) {
             console.log(`🧹 Nettoyage connexion fermée: ${clientName}`);
             clientSockets.delete(clientName);
             connections[clientName] = "disconnected";
+            cleanupNeeded = true;
         }
     });
-    updateStats();
+    
+    if (cleanupNeeded) {
+        updateStats();
+        broadcastUserStatus();
+    }
 }, 60000); // Vérification toutes les minutes
+
+// Ping serveur périodique pour tous les clients
+setInterval(() => {
+    const serverPingMessage = {
+        type: "server_ping",
+        timestamp: new Date().toISOString()
+    };
+    
+    clientSockets.forEach((socket, clientName) => {
+        if (socket.readyState === WebSocket.OPEN) {
+            try {
+                socket.send(JSON.stringify(serverPingMessage));
+            } catch (error) {
+                console.error(`❌ Erreur ping vers ${clientName}:`, error.message);
+            }
+        }
+    });
+}, 25000); // Ping toutes les 25 secondes (sync avec l'app Android)
 
 // Démarrer le serveur
 server.listen(PORT, () => {
@@ -199,13 +363,40 @@ server.listen(PORT, () => {
     console.log(`🔌 WebSocket: ws://localhost:${PORT}`);
     console.log('✅ WebSocket et HTTP sur le MÊME port (requis par Render)');
     console.log('📋 Clients supportés: bernard, liliann');
+    console.log('🎵 Fonctionnalités: identification + streaming audio temps réel');
 });
 
 // Gestion propre de l'arrêt
 process.on('SIGTERM', () => {
     console.log('🛑 Arrêt du serveur...');
+    
+    // Fermer toutes les connexions WebSocket proprement
+    clientSockets.forEach((socket, clientName) => {
+        try {
+            socket.send(JSON.stringify({
+                type: "server_shutdown",
+                message: "Serveur en cours d'arrêt",
+                timestamp: new Date().toISOString()
+            }));
+            socket.close(1001, 'Serveur en cours d\'arrêt');
+        } catch (error) {
+            console.error(`❌ Erreur fermeture ${clientName}:`, error.message);
+        }
+    });
+    
     server.close(() => {
         console.log('✅ Serveur arrêté proprement');
         process.exit(0);
     });
 });
+
+process.on('SIGINT', () => {
+    console.log('\n🛑 Interruption reçue - Arrêt du serveur...');
+    process.emit('SIGTERM');
+});
+
+// Logging des statistiques périodiques
+setInterval(() => {
+    const connectedClients = Array.from(clientSockets.keys());
+    console.log(`📊 Clients connectés: [${connectedClients.join(', ')}] - Total: ${connectedClients.length}`);
+}, 300000); // Toutes les 5 minutes
