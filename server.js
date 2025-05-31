@@ -1,3 +1,7 @@
+// CORRECTION SERVEUR - Ajouter la gestion du message bernard_listening
+
+// Dans le fichier server.js, REMPLACEZ la fonction handleServerMessage par :
+
 // Gestion des connexions WebSocket
 wss.on('connection', (ws, req) => {
     console.log('📱 Nouvelle connexion WebSocket');
@@ -96,7 +100,7 @@ wss.on('connection', (ws, req) => {
             }
         }
         
-        // TRAITEMENT IDENTIFICATION
+        // TRAITEMENT IDENTIFICATION (reste identique...)
         if (clientName && (clientName === "bernard" || clientName === "liliann")) {
             console.log(`✅ Client identifié: ${clientName}`);
             
@@ -149,25 +153,5 @@ wss.on('connection', (ws, req) => {
         }
     });
 
-    // Gestion de la fermeture de connexion
-    ws.on('close', () => {
-        if (clientName) {
-            console.log(`❌ ${clientName} déconnecté`);
-            connections[clientName] = "disconnected";
-            clientSockets.delete(clientName);
-            updateStats();
-            broadcastUserStatus();
-        } else {
-            console.log('❌ Connexion non-identifiée fermée');
-        }
-    });
-
-    // Gestion des erreurs
-    ws.on('error', (error) => {
-        console.error('❌ Erreur WebSocket:', error.message);
-        if (clientName) {
-            connections[clientName] = "error";
-            updateStats();
-        }
-    });
+    // ... reste du code WebSocket identique
 });
