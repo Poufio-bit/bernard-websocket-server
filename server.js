@@ -1,4 +1,4 @@
-// server.js - Serveur WebSocket pour Render.com - VERSION COMPLÈTE AVEC AUDIO + BERNARD_LISTENING
+// server.js - Serveur WebSocket pour Render.com - VERSION COMPLÈTE AVEC HEARTBEAT + TIMEOUT
 const express = require('express');
 const WebSocket = require('ws');
 const http = require('http');
@@ -22,14 +22,72 @@ const connections = {
 // Map pour stocker les WebSockets par client
 const clientSockets = new Map();
 
+// NOUVEAU: Stockage des heartbeats pour détecter les timeouts
+const userHeartbeats = {
+    bernard: null,
+    liliann: null
+};
+
+// NOUVEAU: Fonction pour mettre à jour le heartbeat
+function updateHeartbeat(userId) {
+    userHeartbeats[userId] = Date.now();
+    console.log(`💓 Heartbeat reçu de ${userId} à ${new Date().toLocaleTimeString()}`);
+}
+
+// NOUVEAU: Fonction pour vérifier les timeouts
+function checkTimeouts() {
+    const now = Date.now();
+    const TIMEOUT_MS = 45000; // 45 secondes de timeout
+    
+    Object.keys(connections).forEach(userId => {
+        if (connections[userId] === "connected") {
+            const lastHeartbeat = userHeartbeats[userId];
+            const userSocket = clientSockets.get(userId);
+            
+            if (lastHeartbeat && userSocket && (now - lastHeartbeat) > TIMEOUT_MS) {
+                console.log(`⏰ TIMEOUT détecté pour ${userId}`);
+                console.log(`   Dernière activité: ${new Date(lastHeartbeat).toLocaleTimeString()}`);
+                console.log(`   Temps écoulé: ${Math.round((now - lastHeartbeat) / 1000)}s`);
+                
+                // Marquer comme déconnecté
+                clientSockets.delete(userId);
+                connections[userId] = "disconnected";
+                userHeartbeats[userId] = null;
+                
+                // Fermer la connexion WebSocket
+                try {
+                    userSocket.close(1001, 'Timeout - pas de heartbeat');
+                } catch (e) {
+                    console.log(`⚠️ Erreur fermeture ${userId}: ${e.message}`);
+                }
+                
+                // Notifier les autres utilisateurs du changement de statut
+                broadcastUserStatus();
+                
+                console.log(`🔌 ${userId} déconnecté automatiquement (timeout)`);
+                console.log(`📊 Utilisateurs actifs: ${Object.keys(connections).filter(u => connections[u] === 'connected').join(', ')}`);
+                updateStats();
+            }
+        }
+    });
+}
+
+// NOUVEAU: Démarrer la vérification périodique des timeouts
+setInterval(checkTimeouts, 10000); // Vérifier toutes les 10 secondes
+console.log('⏰ Système de timeout démarré (vérification toutes les 10s, timeout 45s)');
+
 // Route HTTP pour vérifier l'état
 app.get('/', (req, res) => {
     res.json({
         service: "Ecoute Boubouh Server",
-        version: "2.1.0 - Audio Support + Bernard Listening",
+        version: "2.2.0 - Audio Support + Bernard Listening + Heartbeat + Timeout",
         status: "running",
         connections: connections,
-        features: ["identification", "audio_streaming", "real_time_communication", "bernard_listening"],
+        heartbeats: {
+            bernard: userHeartbeats.bernard ? new Date(userHeartbeats.bernard).toISOString() : null,
+            liliann: userHeartbeats.liliann ? new Date(userHeartbeats.liliann).toISOString() : null
+        },
+        features: ["identification", "audio_streaming", "real_time_communication", "bernard_listening", "heartbeat", "timeout_detection"],
         timestamp: new Date().toISOString()
     });
 });
@@ -132,6 +190,8 @@ function broadcastUserStatus() {
         timestamp: new Date().toISOString()
     };
     
+    console.log(`📡 Diffusion statut utilisateurs: Bernard=${connections.bernard}, Liliann=${connections.liliann}`);
+    
     clientSockets.forEach((socket, name) => {
         if (socket.readyState === WebSocket.OPEN) {
             try {
@@ -156,8 +216,8 @@ wss.on('connection', (ws, req) => {
     ws.send(JSON.stringify({
         type: "welcome",
         message: "Connexion WebSocket établie! Envoyez 'bernard' ou 'liliann' pour vous identifier.",
-        server: "Ecoute Boubouh Server v2.1",
-        features: ["audio_streaming", "real_time_communication", "bernard_listening"],
+        server: "Ecoute Boubouh Server v2.2",
+        features: ["audio_streaming", "real_time_communication", "bernard_listening", "heartbeat", "timeout_detection"],
         connectionId: connectionId,
         timestamp: new Date().toISOString()
     }));
@@ -172,10 +232,55 @@ wss.on('connection', (ws, req) => {
             const data = JSON.parse(messageStr);
             console.log('📄 JSON parsé - Type:', data.type);
             
-            // NOUVEAU: Gérer bernard_listening
+            // NOUVEAU: Gérer les heartbeats
+            if (data.type === "heartbeat") {
+                const from = data.from;
+                if (from && (from === "bernard" || from === "liliann")) {
+                    updateHeartbeat(from);
+                    // Pas besoin de répondre au heartbeat, juste l'enregistrer
+                    return;
+                } else {
+                    console.log(`⚠️ Heartbeat invalide de: ${from}`);
+                    return;
+                }
+            }
+            
+            // NOUVEAU: Gérer la batterie de Liliann
+            if (data.type === "liliann_battery") {
+                const batteryLevel = data.battery_level || 0;
+                const from = data.from;
+                console.log(`🔋 Batterie Liliann: ${batteryLevel}%`);
+                
+                // Mettre à jour le heartbeat aussi (la batterie indique que Liliann est vivante)
+                if (from === "liliann") {
+                    updateHeartbeat("liliann");
+                }
+                
+                // Transférer à Bernard s'il est connecté
+                const bernardSocket = clientSockets.get("bernard");
+                if (bernardSocket && bernardSocket.readyState === WebSocket.OPEN) {
+                    try {
+                        bernardSocket.send(JSON.stringify(data));
+                        console.log(`✅ Batterie Liliann envoyée à Bernard: ${batteryLevel}%`);
+                    } catch (error) {
+                        console.error(`❌ Erreur envoi batterie vers Bernard:`, error.message);
+                    }
+                } else {
+                    console.log(`⚠️ Bernard non connecté - batterie ignorée`);
+                }
+                return;
+            }
+            
+            // Gérer bernard_listening
             if (data.type === "bernard_listening") {
                 const listening = data.listening;
+                const from = data.from;
                 console.log(`🎧 Bernard listening: ${listening}`);
+                
+                // Mettre à jour le heartbeat aussi
+                if (from === "bernard") {
+                    updateHeartbeat("bernard");
+                }
                 
                 // Envoyer le message à Liliann
                 const liliannSocket = clientSockets.get("liliann");
@@ -199,6 +304,11 @@ wss.on('connection', (ws, req) => {
             
             // Gérer les différents types de messages
             if (data.type === "audio_data") {
+                // Mettre à jour le heartbeat pour l'activité audio
+                if (data.from && (data.from === "bernard" || data.from === "liliann")) {
+                    updateHeartbeat(data.from);
+                }
+                
                 // Traitement des données audio
                 if (clientName) {
                     handleAudioData(data, clientName);
@@ -210,8 +320,13 @@ wss.on('connection', (ws, req) => {
                         timestamp: new Date().toISOString()
                     }));
                 }
-                return; // Sortir ici pour éviter le traitement d'identification
+                return;
             } else if (data.type === "ping") {
+                // Mettre à jour le heartbeat pour les pings
+                if (clientName) {
+                    updateHeartbeat(clientName);
+                }
+                
                 // Répondre aux pings
                 ws.send(JSON.stringify({
                     type: "pong",
@@ -267,6 +382,10 @@ wss.on('connection', (ws, req) => {
             // Enregistrer le nouveau client
             clientSockets.set(clientName, ws);
             connections[clientName] = "connected";
+            
+            // NOUVEAU: Initialiser le heartbeat
+            updateHeartbeat(clientName);
+            
             updateStats();
             
             // Confirmer la connexion
@@ -274,7 +393,7 @@ wss.on('connection', (ws, req) => {
                 type: "connection_confirmed",
                 client: clientName,
                 status: "connected",
-                message: `Bonjour ${clientName}! Connexion réussie. Audio streaming + bernard_listening disponibles.`,
+                message: `Bonjour ${clientName}! Connexion réussie. Audio streaming + bernard_listening + heartbeat disponibles.`,
                 connectionId: connectionId,
                 timestamp: new Date().toISOString()
             };
@@ -316,6 +435,7 @@ wss.on('connection', (ws, req) => {
         if (clientName && clientSockets.get(clientName) === ws) {
             clientSockets.delete(clientName);
             connections[clientName] = "disconnected";
+            userHeartbeats[clientName] = null; // NOUVEAU: Nettoyer le heartbeat
             updateStats();
             console.log(`🔌 ${clientName} marqué comme déconnecté`);
             
@@ -329,6 +449,7 @@ wss.on('connection', (ws, req) => {
         if (clientName && clientSockets.get(clientName) === ws) {
             clientSockets.delete(clientName);
             connections[clientName] = "disconnected";
+            userHeartbeats[clientName] = null; // NOUVEAU: Nettoyer le heartbeat
             updateStats();
             broadcastUserStatus();
         }
@@ -353,6 +474,7 @@ setInterval(() => {
             console.log(`🧹 Nettoyage connexion fermée: ${clientName}`);
             clientSockets.delete(clientName);
             connections[clientName] = "disconnected";
+            userHeartbeats[clientName] = null; // NOUVEAU: Nettoyer le heartbeat
             cleanupNeeded = true;
         }
     });
@@ -381,6 +503,25 @@ setInterval(() => {
     });
 }, 25000); // Ping toutes les 25 secondes (sync avec l'app Android)
 
+// NOUVEAU: Fonction utilitaire pour logging du statut serveur
+function logServerStatus() {
+    console.log('\n=== STATUT SERVEUR ===');
+    console.log(`🕐 ${new Date().toLocaleString()}`);
+    console.log(`👥 Utilisateurs connectés: ${Object.keys(connections).filter(u => connections[u] === 'connected').length}`);
+    
+    Object.keys(connections).forEach(userId => {
+        if (connections[userId] === 'connected') {
+            const lastHB = userHeartbeats[userId];
+            const timeSince = lastHB ? Math.round((Date.now() - lastHB) / 1000) : 'jamais';
+            console.log(`   - ${userId}: dernier heartbeat il y a ${timeSince}s`);
+        }
+    });
+    console.log('======================\n');
+}
+
+// Afficher le statut toutes les 2 minutes
+setInterval(logServerStatus, 120000);
+
 // Démarrer le serveur
 server.listen(PORT, () => {
     console.log(`🌐 Serveur démarré sur le port ${PORT}`);
@@ -388,7 +529,8 @@ server.listen(PORT, () => {
     console.log(`🔌 WebSocket: ws://localhost:${PORT}`);
     console.log('✅ WebSocket et HTTP sur le MÊME port (requis par Render)');
     console.log('📋 Clients supportés: bernard, liliann');
-    console.log('🎵 Fonctionnalités: identification + streaming audio temps réel + bernard_listening');
+    console.log('🎵 Fonctionnalités: identification + streaming audio temps réel + bernard_listening + heartbeat + timeout');
+    console.log('💓 Heartbeat: 15s côté client, timeout 45s côté serveur');
 });
 
 // Gestion propre de l'arrêt
